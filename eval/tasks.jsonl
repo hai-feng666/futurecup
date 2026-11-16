@@ -1,0 +1,12 @@
+{"task_id": "T01", "dataset": "data/sales.csv", "question": "2026 年前三季度整体营收规模与订单结构如何？给出 3 条经营建议。"}
+{"task_id": "T02", "dataset": "data/sales.csv", "question": "哪个区域贡献最高？各区域之间的结构差异说明什么问题？"}
+{"task_id": "T03", "dataset": "data/sales.csv", "question": "品类营收集中度如何？是否存在过度依赖单一品类的风险？"}
+{"task_id": "T04", "dataset": "data/sales.csv", "question": "客单价水平是否合理？离群订单对客单价口径有什么影响？"}
+{"task_id": "T05", "dataset": "data/sales.csv", "question": "数据质量问题主要集中在哪些字段？对下游分析结论有何影响？"}
+{"task_id": "T06", "dataset": "data/sales.csv", "question": "若要提升整体营收，优先在哪个区域或品类加大投入？给出判断依据。"}
+{"task_id": "T07", "dataset": "data/sales.csv", "question": "渠道结构是否存在失衡？直销与渠道的营收占比差异意味着什么？"}
+{"task_id": "T08", "dataset": "data/sales.csv", "question": "请评估本季度经营健康度，并指出三项最需要干预的风险点。"}
+{"task_id": "T09", "dataset": "data/sales.csv", "question": "折扣策略是否有效？折扣与营收规模之间是否存在关联证据？"}
+{"task_id": "T10", "dataset": "data/sales.csv", "question": "如果只能做一件改进，应该先解决数据质量还是先优化品类结构？"}
+{"task_id": "T11", "dataset": "data/sales.csv", "question": "上半年与第三季度的营收结构是否有明显变化？请用数字说明。"}
+{"task_id": "T12", "dataset": "data/sales.csv", "question": "请给管理层一份不超过 300 字的经营诊断摘要，必须包含关键数字。"}

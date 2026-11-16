@@ -1,0 +1,82 @@
+{
+  "name": "data_insight",
+  "title": "多 Agent 经营数据诊断",
+  "version": 2,
+  "final_node": "report",
+  "max_rounds": 3,
+  "budget_tokens": 200000,
+  "inputs": {
+    "dataset": "data/sales.csv",
+    "question": "2026 年前三季度各区域营收结构如何？哪些区域/品类存在结构性异常？给出 3 条可执行的经营建议。"
+  },
+  "nodes": [
+    {
+      "id": "profile",
+      "role": "data_profiler",
+      "depends_on": [],
+      "candidates": ["profiler-a"],
+      "task": "请探查数据集 {dataset} 的结构与质量。业务问题背景：{question}",
+      "tools": ["csv_profile"],
+      "verify": ["rule"],
+      "timeout_s": 60
+    },
+    {
+      "id": "clean",
+      "role": "cleaner",
+      "depends_on": ["profile"],
+      "candidates": ["cleaner-a"],
+      "task": "依据探查报告给出清洗规则清单与影响记录数。\n[探查报告]\n{profile}",
+      "tools": [],
+      "verify": ["rule"],
+      "timeout_s": 60
+    },
+    {
+      "id": "analyze",
+      "role": "analyst",
+      "depends_on": ["clean"],
+      "candidates": ["analyst-a", "analyst-b"],
+      "task": "基于事实表完成经营分析，回答业务问题。\n[业务问题]\n{question}\n[清洗结论]\n{clean}",
+      "tools": ["sql_query"],
+      "tool_args": {
+        "query": "SELECT region, ROUND(SUM(revenue),2) AS rev, COUNT(*) AS orders FROM sales GROUP BY region ORDER BY rev DESC"
+      },
+      "verify": ["rule", "recompute"],
+      "timeout_s": 120
+    },
+    {
+      "id": "deep_dive",
+      "role": "analyst",
+      "depends_on": ["analyze"],
+      "candidates": ["analyst-b", "analyst-a"],
+      "task": "对失真切片做深挖，说明异常成因假设及验证方法。\n[分析结论]\n{analyze}",
+      "tools": ["sql_query"],
+      "tool_args": {
+        "query": "SELECT region, product, ROUND(SUM(revenue),2) AS rev, COUNT(*) AS orders, ROUND(SUM(revenue)/COUNT(*),2) AS avg_rev FROM sales GROUP BY region, product ORDER BY region, rev DESC"
+      },
+      "verify": ["rule"],
+      "when": "outlier_count > 0",
+      "timeout_s": 120
+    },
+    {
+      "id": "report",
+      "role": "writer",
+      "depends_on": ["analyze", "deep_dive"],
+      "candidates": ["writer-a"],
+      "task": "撰写管理层诊断报告。数字必须原样搬运，不得改动。\n[分析结论]\n{analyze}\n[深挖结论]\n{deep_dive}",
+      "tools": [],
+      "verify": ["rule", "recompute"],
+      "rule": {"min_len": 300, "min_headings": 3},
+      "timeout_s": 120
+    },
+    {
+      "id": "review",
+      "role": "reviewer",
+      "depends_on": ["report"],
+      "candidates": ["reviewer-a"],
+      "task": "逐条核对下列报告中每个数字的出处，给出 PASS/FAIL 与问题清单。\n[报告]\n{report}\n[事实表]\n{profile}\n[本次工具证据（上游节点实际取到的数据，报告引用它们属于合法）]\n{tool_evidence}",
+      "tools": [],
+      "verify": ["llm_judge"],
+      "timeout_s": 120
+    }
+  ]
+}

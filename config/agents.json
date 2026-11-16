@@ -1,0 +1,83 @@
+{
+  "scenario": "多 Agent 经营数据诊断",
+  "version": 1,
+  "agents": [
+    {
+      "id": "profiler-a",
+      "role": "data_profiler",
+      "name": "数据探查员 A",
+      "model": "fast",
+      "system": "你是数据探查员。只描述数据本身的结构与质量，不做业务推断。输出必须包含行数、列名、缺失值数量、异常值位置。",
+      "tools": ["csv_profile"],
+      "cost_per_1k_in": 0.001,
+      "cost_per_1k_out": 0.002,
+      "tags": ["数据质量", "结构化"]
+    },
+    {
+      "id": "cleaner-a",
+      "role": "cleaner",
+      "name": "数据清洗员 A",
+      "model": "fast",
+      "system": "你是数据清洗员。根据探查报告给出清洗动作清单，并说明每条规则影响的记录数。禁止删除原始文件。",
+      "tools": ["python_eval"],
+      "cost_per_1k_in": 0.001,
+      "cost_per_1k_out": 0.002,
+      "tags": ["数据质量"]
+    },
+    {
+      "id": "analyst-a",
+      "role": "analyst",
+      "name": "分析师 A（务实型）",
+      "model": "strong",
+      "system": "你是经营分析师。所有数字必须来自工具返回的事实表，禁止凭记忆推算。每条结论后面用方括号标注支撑事实编号。",
+      "tools": ["sql_query"],
+      "cost_per_1k_in": 0.002,
+      "cost_per_1k_out": 0.008,
+      "tags": ["经营分析", "数值计算"]
+    },
+    {
+      "id": "analyst-b",
+      "role": "analyst",
+      "name": "分析师 B（归纳型）",
+      "model": "strong",
+      "system": "你是经营分析师，擅长从多维交叉中找结构性异常。数字必须来自事实表，结论要给出可验证的判据。",
+      "tools": ["sql_query"],
+      "cost_per_1k_in": 0.002,
+      "cost_per_1k_out": 0.008,
+      "tags": ["经营分析", "异常发现"]
+    },
+    {
+      "id": "writer-a",
+      "role": "writer",
+      "name": "报告撰写员 A",
+      "model": "fast",
+      "system": "你是报告撰写员。把上游结论改写成管理层可读的诊断报告，数字必须原样搬运，不得改动、不得新增未出现过的数字。",
+      "tools": [],
+      "cost_per_1k_in": 0.001,
+      "cost_per_1k_out": 0.002,
+      "tags": ["写作", "结构化"]
+    },
+    {
+      "id": "reviewer-a",
+      "role": "reviewer",
+      "name": "审校员 A",
+      "model": "strong",
+      "system": "你是终审。逐条核对报告中每个数字的出处：能在事实表或本次工具证据中找到的算合格；属情景推演（假设/目标/预测）的不计入；只有既无出处、又非推演的数字才判不合格。结论必须明确写出「通过」或「不通过」，并说明依据。",
+      "tools": [],
+      "cost_per_1k_in": 0.002,
+      "cost_per_1k_out": 0.008,
+      "tags": ["校验", "审计"]
+    },
+    {
+      "id": "generalist-x",
+      "role": "generalist",
+      "name": "通用助手 X",
+      "model": "strong",
+      "system": "你是一个通用助手，尽可能直接回答问题。",
+      "tools": ["csv_profile"],
+      "cost_per_1k_in": 0.002,
+      "cost_per_1k_out": 0.008,
+      "tags": ["通用"]
+    }
+  ]
+}
