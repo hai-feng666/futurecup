@@ -67,8 +67,7 @@ def _fact_values(facts: dict[str, Any]) -> list[float]:
         facts.get("total_revenue", 0), facts.get("avg_order_value", 0),
         facts.get("max_order_value", 0), facts.get("order_count", 0),
     ]
-    for key in ("by_region", "by_region_avg", "by_region_orders",
-                "by_product", "by_product_avg"):
+    for key in ("by_region", "by_region_avg", "by_region_orders", "by_product"):
         vals += list((facts.get(key) or {}).values())
     return [float(v) for v in vals if isinstance(v, (int, float))]
 
@@ -138,6 +137,11 @@ def rule_verify(text: str, spec: dict[str, Any] | None = None) -> Verdict:
         n_head = len(HEADING_RE.findall(text or ""))
         if n_head < min_head:
             problems.append(f"分节数量不足（{n_head} < {min_head}）")
+    # 完整性：正文被 max_tokens 截断时会停在中途，末尾没有句末标点
+    if spec.get("complete_ending"):
+        tail = (text or "").rstrip()[-3:]
+        if not any(tail.endswith(p) for p in ("。", "！", "？", "）", "」", "】", ".", ")")):
+            problems.append(f"正文疑似被截断，结尾为：…{tail}")
     for m in must:
         if m not in (text or ""):
             problems.append(f"缺少必备内容：{m}")
@@ -157,24 +161,31 @@ def rule_verify(text: str, spec: dict[str, Any] | None = None) -> Verdict:
 # L2 复算校验（核心）
 # --------------------------------------------------------------------------
 def recompute_verify(text: str, facts: dict[str, Any],
-                     extra_allowed: list[float] | None = None) -> Verdict:
+                     extra_allowed: list[float] | None = None,
+                     required: list[str] | None = None) -> Verdict:
     """复算校验。
 
     extra_allowed：本次运行中工具实际返回过的数值。
-    报告引用工具输出属于正当行为，不能判成幻觉——只有「既不在事实表、
-    也不在本次任何工具输出里」的数字才算编造。
+    required     ：必须复述的口径名（默认三项全要）；分析类节点可按职责裁剪。
     """
     nums = extract_numbers(text)
     facts_vals = _fact_values(facts) + list(extra_allowed or [])
     derived_vals = _derived_values(facts, extra_allowed)
+    all_required = {
+        "总营收": float(facts.get("total_revenue", 0)),
+        "客单价": float(facts.get("avg_order_value", 0)),
+        "订单数": float(facts.get("order_count", 0)),
+    }
+    keys = required if required is not None else list(all_required)
+    req = {k: all_required[k] for k in keys if k in all_required}
     required = {
         "总营收": float(facts.get("total_revenue", 0)),
         "客单价": float(facts.get("avg_order_value", 0)),
         "订单数": float(facts.get("order_count", 0)),
     }
     matched_req, missing_req = [], []
-    for name, val in required.items():
-        if any(_close(n, val) or (name == "订单数" and _close(n, val)) for n in nums):
+    for name, val in req.items():
+        if any(_close(n, val) for n in nums):
             matched_req.append(name)
         else:
             missing_req.append(name)
@@ -203,8 +214,10 @@ def recompute_verify(text: str, facts: dict[str, Any],
     hard = unmatched if len(unmatched) > tol else []
 
     passed = not missing_req and not hard and region_ok
+    # 未要求复述任何口径时，该项视为满足（否则会把“只做异常分析”的节点误判为低置信）
+    req_ratio = 1.0 if not req else len(matched_req) / len(req)
     conf = (
-        0.5 * (len(matched_req) / max(1, len(required)))
+        0.5 * req_ratio
         + 0.3 * (1.0 if not hard else 0.0)
         + 0.2 * (1.0 if region_ok else 0.0)
         - 0.05 * min(len(unmatched), 4)
@@ -225,9 +238,11 @@ def recompute_verify(text: str, facts: dict[str, Any],
 # --------------------------------------------------------------------------
 # L3 交叉验证
 # --------------------------------------------------------------------------
-def cross_verify(text_a: str, text_b: str, facts: dict[str, Any]) -> Verdict:
-    va = recompute_verify(text_a, facts)
-    vb = recompute_verify(text_b, facts)
+def cross_verify(text_a: str, text_b: str, facts: dict[str, Any],
+                 extra_allowed: list[float] | None = None) -> Verdict:
+    """两路独立产出的互相印证。返回的 passed 表示“两方都能通过复算且结论一致”。"""
+    va = recompute_verify(text_a, facts, extra_allowed, required=[])
+    vb = recompute_verify(text_b, facts, extra_allowed, required=[])
     agree = va.passed == vb.passed
     conf = 0.5 * (va.confidence + vb.confidence) * (1.0 if agree else 0.8)
     return Verdict("cross", va.passed and vb.passed and agree, conf, {
@@ -249,12 +264,16 @@ NEG_PREFIX = "不未无非没否"
 def judge_verdict(text: str) -> bool | None:
     """从中/英文终审文本里抽结论。
 
-    规则：取**最后一次出现**的结论词所在侧——真实审校文本常见
-    "发现 3 处问题 …… 结论：通过" 这种结构，简单查关键词会误判。
-    另外必须处理子串重叠：否定词里含有肯定词（"不通过" 含 "通过"），
-    落在否定词内部的肯定词要被丢弃，否则永远判通过。
+    优先级：显式写出的「结论：X」行 > 关键词出现顺序。
+    真实评审文本常在开头写「结论：不通过」，正文再列举问题（其中可能夹带
+    “通过”“可发布”等词），只看关键词的先后会判反。
     """
     body = text or ""
+    explicit = re.findall(r"结论\s*[:：]\s*(不通过|未通过|通过|合格|不合格)", body)
+    if explicit:
+        last = explicit[-1]
+        return last in ("通过", "合格")
+
     found: list[tuple[int, int, bool]] = []
     for w in NEG_WORDS:
         for m in re.finditer(re.escape(w), body):

@@ -1,9 +1,11 @@
 """命令行入口：一个人用终端就能完成全部演示动作。
 
-  python -m harness.cli run --fault      # 跑一次（--fault 强制注入一次数字漂移，演示自循环）
-  python -m harness.cli runs             # 看历史
-  python -m harness.cli replay <run_id>  # 离线回放一次运行
-  python -m harness.cli eval             # 基线对比评测
+  python -m harness.cli run                       # 用默认数据集跑一次
+  python -m harness.cli run --dataset x.csv --question "…"   # 换数据/换问题
+  python -m harness.cli run --fault               # 注入一次故障，演示自循环
+  python -m harness.cli runs                      # 看历史
+  python -m harness.cli replay <run_id>           # 离线回放一次运行
+  python -m harness.cli eval                      # 基线对比评测
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from .engine import Executor, infer_deps
 from .models import get_backend
@@ -83,6 +86,23 @@ def run_final_output(store: Store, run_id: str) -> str:
     return nodes[-1]["output"] if nodes else "（无输出）"
 
 
+def _run_inputs(args: argparse.Namespace) -> dict[str, Any] | None:
+    """把 --dataset / --question 组装成工作流输入；都没给时返回 None（用默认配置）。"""
+    inputs: dict[str, Any] = {}
+    dataset = getattr(args, "dataset", None)
+    question = getattr(args, "question", None)
+    if dataset:
+        p = Path(dataset)
+        if not p.is_absolute() and not p.exists():
+            p = ROOT / dataset
+        if not p.exists():
+            raise SystemExit(f"数据文件不存在：{dataset}")
+        inputs["dataset"] = str(p if p.is_absolute() else Path(dataset))
+    if question:
+        inputs["question"] = question
+    return inputs or None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     if args.fault:
         os.environ["HARNESS_FORCE_FAULT"] = "1"
@@ -92,7 +112,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     flow_path = Path(args.flow)
     if not flow_path.is_absolute():
         flow_path = ROOT / flow_path
-    res = ex.run(flow_path, mode=args.mode)
+    res = ex.run(flow_path, inputs=_run_inputs(args), mode=args.mode)
     print(_fmt_run(store, res["run_id"], show_output=not args.json))
     if args.json:
         print(json.dumps({k: v for k, v in res.items() if k != "facts"}, ensure_ascii=False,
@@ -130,7 +150,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--flow", default="flows/data_insight.json")
     r.add_argument("--mode", default="harness", choices=["harness", "serial", "single"])
     r.add_argument("--backend", default=None, help="mock / openai")
-    r.add_argument("--fault", action="store_true", help="强制注入一次数字漂移")
+    r.add_argument("--fault", action="store_true", help="注入一次故障（演示返修）")
+    r.add_argument("--dataset", default=None,
+                   help="指定数据文件，覆盖工作流里配置的默认数据集")
+    r.add_argument("--question", default=None,
+                   help="覆盖业务问题（自然语言）")
     r.add_argument("--json", action="store_true")
     r.set_defaults(func=cmd_run)
 

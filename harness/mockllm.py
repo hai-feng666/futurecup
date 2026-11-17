@@ -54,6 +54,7 @@ def generate(role: str, prompt: str, facts: dict[str, Any] | None,
     region = f.get("top_region", "华东")
     regions = f.get("by_region", {}) or {}
     products = f.get("by_product", {}) or {}
+    avg_by_region = f.get("by_region_avg", {}) or {}
     outliers = int(f.get("outlier_count", 0))
 
     show_total = f"{total}" if (repaired or not drift) else _corrupt(total)
@@ -96,6 +97,28 @@ def generate(role: str, prompt: str, facts: dict[str, Any] | None,
             f"建议1：对{region}复制打法，优先投放头部品类。\n"
             "建议2：对离群订单做单独复核，避免冲击客单价口径。\n"
             "建议3：把 qty 缺失设为入库强校验，源头治理。"
+        )
+        if drift and not repaired:
+            body += "\n" + FAIL_TAG
+        return body
+
+    if role == "arbiter":
+        # 合并两路独立分析：数字统一取自事实表，并显式点出分歧处理方式
+        top3 = list(regions.items())[:3]
+        body = (
+            f"【仲裁结论】{head}\n"
+            "一、一致部分（两方均确认）\n"
+            f"· 有效订单 {orders} 笔，总营收 {show_total} 元，客单价 {show_avg} 元（F2/F3/F4）。\n"
+            f"· {region} 区域营收最高（F6），区域结构为："
+            + "；".join(f"{k}={v}" for k, v in top3) + "。\n"
+            "二、分歧处理\n"
+            "· A 侧重规模排名、B 侧重异常归因，两者口径一致，无实质冲突。\n"
+            f"· 唯一需保留的是 {outliers} 笔营收离群订单的区域归属未知（F8），"
+            "在补全前不对区域结论做进一步归因。\n"
+            "三、合并结论\n"
+            f"· 经营结构呈『一区领先、中间三区接近、一区垫底』格局，"
+            f"末位区域单均营收 {list(avg_by_region.values())[-1] if avg_by_region else 0} 元（F11），优先级最高。\n"
+            "· 建议按『区域—品类—渠道』三层联动整改。"
         )
         if drift and not repaired:
             body += "\n" + FAIL_TAG

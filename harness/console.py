@@ -324,6 +324,8 @@ async function refresh(){
       let detail="";
       if(v.verifier==="recompute") detail=`缺失=${JSON.stringify(ev.missing_required||[])} 幻觉数字=${JSON.stringify(ev.hallucinated_numbers||[])}`;
       else if(v.verifier==="rule") detail=`问题=${JSON.stringify(ev.problems||[])}`;
+      else if(v.verifier==="cross") detail=`比对=${JSON.stringify(ev.compared||[])} 一致=${ev.agree?"是":"否"} A通过=${ev.a_passed?"是":"否"} B通过=${ev.b_passed?"是":"否"}`;
+      else if(v.verifier==="llm_judge") detail=`结论=${ev.verdict||"-"}${ev.cites_evidence?"（附依据）":""}${ev.mode?" 方式="+ev.mode:""}`;
       return `<tr><td><code>${v.node_id}</code></td><td>${v.verifier}</td>
       <td class="${v.passed?'':'err'}">${v.passed?'通过':'未通过'}</td>
       <td>${Number(v.confidence).toFixed(2)}</td>

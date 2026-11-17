@@ -39,7 +39,7 @@ class Backend:
     name = "base"
 
     def chat(self, messages: list[dict[str, str]], model: str, temperature: float = 0.2,
-             max_tokens: int = 1200, meta: dict[str, Any] | None = None) -> Completion:
+             max_tokens: int = 2400, meta: dict[str, Any] | None = None) -> Completion:
         raise NotImplementedError
 
     def resolve_model(self, alias: str) -> str:
@@ -50,7 +50,7 @@ class MockBackend(Backend):
     name = "mock"
 
     def chat(self, messages: list[dict[str, str]], model: str, temperature: float = 0.2,
-             max_tokens: int = 1200, meta: dict[str, Any] | None = None) -> Completion:
+             max_tokens: int = 2400, meta: dict[str, Any] | None = None) -> Completion:
         t0 = time.time()
         meta = meta or {}
         prompt = messages[-1]["content"] if messages else ""
@@ -91,7 +91,7 @@ class OpenAICompat(Backend):
         return {"fast": self.fast, "strong": self.strong}.get(alias, alias)
 
     def chat(self, messages: list[dict[str, str]], model: str, temperature: float = 0.2,
-             max_tokens: int = 1200, meta: dict[str, Any] | None = None) -> Completion:
+             max_tokens: int = 3500, meta: dict[str, Any] | None = None) -> Completion:
         t0 = time.time()
         model_id = self.resolve_model(model)
         payload = {

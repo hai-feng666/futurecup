@@ -25,9 +25,17 @@ class TestFlow(unittest.TestCase):
         from harness.engine import load_flow
         flow = load_flow(ROOT / "flows" / "data_insight.json")
         lv = levels_of(flow)
-        self.assertEqual(len(lv), 6, "profile→clean→analyze→deep_dive→report→review 共 6 层")
-        first = [n["id"] for n in lv[0]]
-        self.assertEqual(first, ["profile"])
+        # profile → clean → [analyze_a ‖ analyze_b] → arbitrate → deep_dive → report → review
+        self.assertEqual(len(lv), 7, "应为 7 层（含双分析师并行层）")
+        self.assertEqual([n["id"] for n in lv[0]], ["profile"])
+        self.assertEqual(sorted(n["id"] for n in lv[2]), ["analyze_a", "analyze_b"],
+                         "第 2 层应是两个分析师并行")
+
+    def test_parallelism_is_real(self):
+        """必须存在真正的并行层，否则“同层并发”的说法不成立。"""
+        from harness.engine import load_flow
+        lv = levels_of(load_flow(ROOT / "flows" / "data_insight.json"))
+        self.assertGreaterEqual(max(len(x) for x in lv), 2)
 
     def test_when_expression(self):
         self.assertTrue(eval_when("outlier_count > 0", {"outlier_count": 3}))
@@ -114,12 +122,17 @@ class TestEndToEnd(unittest.TestCase):
         ex = Executor(store, MockBackend())
         res = ex.run(ROOT / "flows" / "data_insight.json")
         self.assertTrue(res["success"], res["hallucinated_numbers"])
-        self.assertGreaterEqual(res["attempts"], 6)
+        self.assertGreaterEqual(res["attempts"], 8)
         nodes = store.nodes(res["run_id"])
         self.assertEqual({n["node_id"] for n in nodes},
-                         {"profile", "clean", "analyze", "deep_dive", "report", "review"})
+                         {"profile", "clean", "analyze_a", "analyze_b", "arbitrate",
+                          "deep_dive", "report", "review"})
         verdicts = store.verdicts(res["run_id"])
-        self.assertTrue(any(v["verifier"] == "recompute" for v in verdicts))
+        names = {v["verifier"] for v in verdicts}
+        self.assertTrue({"rule", "recompute", "cross", "llm_judge"} <= names,
+                        f"四层验证应全部启用，实际：{names}")
+        # trace 必须留存 prompt，否则无法复现
+        self.assertTrue(any(n["prompt"] for n in nodes), "trace 未记录 prompt")
 
     def test_forced_fault_triggers_repair(self):
         import os
@@ -133,16 +146,23 @@ class TestEndToEnd(unittest.TestCase):
             os.environ["HARNESS_FORCE_FAULT"] = "0"
         self.assertTrue(res["success"])
         attempts = [n["attempt"] for n in store.nodes(res["run_id"])
-                    if n["node_id"] == "analyze"]
-        self.assertGreater(max(attempts), 1, "强制故障下 analyze 应该出现返修轮次")
+                    if n["node_id"] in ("analyze_a", "analyze_b")]
+        self.assertTrue(attempts, "应当存在分析师节点记录")
+        self.assertGreater(max(attempts), 1, "强制故障下分析师应出现返修轮次")
 
 
 class TestRealModelReport(unittest.TestCase):
     """用真实 DeepSeek 输出做回归。
 
-    样本是 11/11 一次**失败**的真实运行：报告引用了 deep_dive 节点 SQL 返回的
+    样本应为 11/11 一次**失败**的真实运行：报告引用了 deep_dive 节点 SQL 返回的
     品类×渠道切片金额，但旧版校验器只认基础事实表，于是判成幻觉。
     修复后（事实表 + 本次运行工具证据池）必须通过。
+
+    重建样本的方法：
+        python -m harness.cli run                     # 真实后端跑一次
+        python tools/dump_report.py <run_id> report    # 导出 report 节点输出
+        # 另存为 tests/fixtures/report_real_model.md
+    样本缺失时本组测试自动跳过，不影响其余用例。
     """
 
     @classmethod

@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   status TEXT, model TEXT,
   prompt_tokens INTEGER DEFAULT 0, completion_tokens INTEGER DEFAULT 0,
   latency_ms INTEGER DEFAULT 0, cost REAL DEFAULT 0,
-  tool_calls TEXT, decision TEXT, output TEXT, error TEXT,
+  tool_calls TEXT, decision TEXT, prompt TEXT, output TEXT, error TEXT,
   started TEXT, finished TEXT
 );
 CREATE TABLE IF NOT EXISTS verdicts (
@@ -101,16 +101,18 @@ class Store:
                  completion_tokens: int, latency_ms: int, cost: float,
                  tool_calls: list[str], output: str, error: str | None,
                  started: str, finished: str,
-                 decision: dict[str, Any] | None = None) -> None:
+                 decision: dict[str, Any] | None = None,
+                 prompt: str = "") -> None:
         self._ex(
             "INSERT INTO nodes(run_id,node_id,agent_id,role,attempt,status,model,"
             "prompt_tokens,completion_tokens,latency_ms,cost,tool_calls,decision,"
-            "output,error,started,finished) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "prompt,output,error,started,finished) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, node_id, agent_id, role, attempt, status, model,
              prompt_tokens, completion_tokens, latency_ms, cost,
              json.dumps(tool_calls, ensure_ascii=False),
              json.dumps(decision or {}, ensure_ascii=False),
-             output, error, started, finished),
+             (prompt or "")[:2400], output, error, started, finished),
         )
 
     def add_verdict(self, run_id: str, node_id: str, verifier: str, passed: bool,

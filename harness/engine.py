@@ -109,6 +109,7 @@ class Executor:
         self._load_lock = threading.Lock()
         self.evidence_nums: list[float] = []   # 本次运行所有工具输出出现过的数值
         self.evidence_chunks: list[str] = []   # 工具输出原文（供审校节点核对）
+        self.last_verdicts: dict[str, list[Any]] = {}
         self.force_fault = os.getenv("HARNESS_FORCE_FAULT", "0") == "1"
         self.verbose = True
         self._reset_totals()
@@ -125,6 +126,7 @@ class Executor:
         self.attempts = 0
         self.evidence_nums = []
         self.evidence_chunks = []
+        self.last_verdicts = {}
 
     def agent(self, aid: str) -> dict[str, Any]:
         for a in self.agents:
@@ -184,11 +186,33 @@ class Executor:
             if mode in ("serial", "single") or len(runnable) == 1:
                 for n in runnable:
                     self._run_node(run_id, n, ctx, facts, dataset, mode,
-                                   max_attempts, budget)
+                                   self._node_attempts(n, max_attempts), budget)
             else:
                 with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(runnable))) as ex:
                     list(ex.map(lambda n: self._run_node(
-                        run_id, n, ctx, facts, dataset, mode, max_attempts, budget), runnable))
+                        run_id, n, ctx, facts, dataset, mode,
+                        self._node_attempts(n, max_attempts), budget), runnable))
+
+        # ---- 交叉节点回溯：审校判否时，带着具体意见回到撰写节点重写一次 ----
+        review_id = flow.get("review_node")
+        back_id = flow.get("backtrack_to")
+        if mode == "harness" and review_id and back_id:
+            for cycle in range(1, int(flow.get("backtrack_rounds", 1)) + 1):
+                rv = self.last_verdicts.get(review_id) or []
+                failed = [v for v in rv if not v.passed]
+                if not failed:
+                    break
+                self._say(f"  ⟲ 审校未通过，回溯重写 {back_id}（第 {cycle} 次）")
+                hint = ("上文审校环节指出了以下问题，请据此重写正文（不要复述意见本身）：\n"
+                        + json.dumps([v.to_dict() for v in failed], ensure_ascii=False,
+                                     indent=1)[:1800])
+                back = next(n for n in flow["nodes"] if n["id"] == back_id)
+                self._run_node(run_id, back, ctx, facts, dataset, mode,
+                               int(flow.get("backtrack_attempts", 1)), budget,
+                               preface=hint, attempt_start=2)
+                rev = next(n for n in flow["nodes"] if n["id"] == review_id)
+                self._run_node(run_id, rev, ctx, facts, dataset, mode, 1, budget,
+                               attempt_start=2)
 
         # ---- 终局判定：对最终输出再跑一次复算校验（独立于各节点的自检） ----
         final_id = self._terminal_node(flow)
@@ -224,6 +248,11 @@ class Executor:
         }
 
     @staticmethod
+    def _node_attempts(node: dict[str, Any], flow_max: int) -> int:
+        """节点级重试上限：审校类节点重试没有意义（它不改产出），默认只跑一次。"""
+        return max(1, min(flow_max, int(node.get("max_attempts", flow_max))))
+
+    @staticmethod
     def _terminal_node(flow: dict[str, Any]) -> str:
         if flow.get("final_node"):
             return str(flow["final_node"])
@@ -232,10 +261,85 @@ class Executor:
         leaves = [n["id"] for n in flow["nodes"] if n["id"] not in used]
         return leaves[-1] if leaves else flow["nodes"][-1]["id"]
 
+    # ---------------- 验证器辅助 ----------------
+    def _judge(self, node: dict[str, Any], text: str, facts: dict[str, Any],
+               role: str, run_id: str, ag: dict[str, Any]) -> V.Verdict:
+        """L4 终审：可选地真正调用一次模型做独立评审。
+
+        node.judge_by_model = true 时发起一次真实评审调用（mock 后端自动退化为
+        规则抽取，保证离线可跑）；否则使用结论抽取。
+        """
+        if not node.get("judge_by_model") or self.backend.name == "mock":
+            return V.llm_judge_verify(text, reviewer_text=text)
+
+        judge_prompt = (
+            "你是独立评审。逐条核对下列报告中的数字能否在「事实表」或「工具证据」中找到依据，"
+            "并检查结论是否存在自相矛盾。\n\n"
+            f"【事实表】\n{facts_as_text(facts)[:1500]}\n\n"
+            f"【本次工具证据（上游节点实际取到的数据，引用它们属于合法；"
+            f"若证据尾部被截断，请对截断段的数字标注「无法核对」而非直接判不通过）】\n"
+            f"{''.join(self.evidence_chunks)[:6000]}\n\n"
+            f"【待审报告】\n{text[:4000]}\n\n"
+            "判定口径（务必严格遵守，越界即误判）：\n"
+            "· 只判两类问题：① 数字能否在【事实表】或【工具证据】中找到出处；"
+            "② 报告中数字与数字之间是否自相矛盾（含排序方向、增减方向写反）。\n"
+            "· **不要**评价措辞、格式、篇幅、行文风格；**不要**因报告未写计算式而判不通过；"
+            "**不要**因报告对“哪些数据可用/不可用”的评论而判不通过（那是作者的表述习惯，不是数字错误）。\n"
+            "· 小于 1000 的数字（百分比、比值、笔数）不要求计算式。\n"
+            "· 若两类问题都不存在，即使你觉得写得不好，也必须判通过。\n\n"
+            "输出格式（必须严格遵守）：\n第一行只写 结论：通过 或 结论：不通过\n"
+            "随后 3 行以内说明依据（哪几个数字有问题、什么问题）。"
+        )
+        comp = self.backend.chat(
+            [{"role": "system", "content": "你是严谨的审计员，只依据给定事实判断。"},
+             {"role": "user", "content": judge_prompt}],
+            model="strong", temperature=0.0,
+            meta={"role": "reviewer", "facts": facts, "attempt": 1,
+                  "task_key": f"{node['id']}#judge"},
+        )
+        cost = self._cost(ag, comp.prompt_tokens, comp.completion_tokens)
+        with self._load_lock:
+            self.total_tokens += comp.prompt_tokens + comp.completion_tokens
+            self.total_cost += cost
+        if comp.error:
+            return V.llm_judge_verify(text, reviewer_text=text)
+
+        verdict = V.judge_verdict(comp.text or "")
+        if verdict is None:
+            return V.llm_judge_verify(text, reviewer_text=text)
+        return V.Verdict("llm_judge", bool(verdict), 0.9, {
+            "mode": "model", "verdict": "通过" if verdict else "不通过",
+            "judge_excerpt": (comp.text or "")[:200],
+            "judge_latency_ms": comp.latency_ms,
+        })
+
+    def _cross(self, node: dict[str, Any], text: str, facts: dict[str, Any],
+               ctx: dict[str, Any], ag: dict[str, Any]) -> V.Verdict:
+        """L3 交叉验证：比对两路**独立**产出的结论是否互相印证。
+
+        node.cross_with 指定要比对的两个上游节点（两条独立分析的输出），
+        不消耗额外模型调用。
+        """
+        pair = node.get("cross_with") or []
+        if isinstance(pair, str):
+            pair = [pair]
+        nums = list(self.evidence_nums)
+        texts = [str(ctx.get(p, "")) for p in pair[:2]]
+        if len(texts) == 2 and all(texts):
+            v = V.cross_verify(texts[0], texts[1], facts, nums)
+            v.evidence["compared"] = pair[:2]
+            return v
+        if len(texts) == 1 and texts[0]:
+            v = V.cross_verify(text, texts[0], facts, nums)
+            v.evidence["compared"] = [node["id"], pair[0]]
+            return v
+        return V.Verdict("cross", False, 0.0, {"error": "cross_with 未配置或上游为空"})
+
     # ---------------- 单个节点 ----------------
     def _run_node(self, run_id: str, node: dict[str, Any], ctx: dict[str, Any],
                   facts: dict[str, Any], dataset: str, mode: str,
-                  max_attempts: int, budget: float) -> None:
+                  max_attempts: int, budget: float, preface: str = "",
+                  attempt_start: int = 1) -> None:
         node_id, role = node["id"], node["role"]
         cand_ids = node.get("candidates") or [a["id"] for a in self.agents if a["role"] == role]
         cands = [self.agent(i) for i in cand_ids if any(a["id"] == i for a in self.agents)]
@@ -272,31 +376,32 @@ class Executor:
                 ctx["tool_evidence"] = "\n".join(self.evidence_chunks)[:4000]
 
             base_user = safe_format(node["task"], ctx)
+            # 事实表与工具证据必须同时给：只给工具输出时，模型看不到未查询的口径
+            # （例如只查了品类，就不知道各区域订单数），会自行编造后被判幻觉。
+            base_user += "\n\n【事实表】\n" + facts_as_text(facts)
             if evidence:
                 base_user += "\n\n【工具证据】\n" + "\n".join(evidence)
-            else:
-                base_user += "\n\n【事实表】\n" + facts_as_text(facts)
 
             repair_hint = ""
             last_text = ""
+            if preface:
+                repair_hint = preface
             self._say(f"  ▸ {node_id:<10}{ag['id']:<13}开始（{role}）")
-            for attempt in range(1, max_attempts + 1):
+            for attempt in range(attempt_start, attempt_start + max_attempts):
                 user = base_user + (f"\n\n【返修意见 / 上一轮验证失败原因】\n{repair_hint}"
                                     if repair_hint else "")
-                # 故障演练：第一版故意给出一个不合格输出，用于演示"验证捕获 → 自动返修"。
-                # 对标混沌工程（chaos engineering）：可复现的故障比随机故障更有演示价值。
-                if (self.force_fault and attempt == 1
-                        and role in ("analyst", "writer")):
-                    user += ("\n\n【故障演练指令】本次为容错能力演示演练：请在第一版中"
-                             "故意把总营收写成一个估算值（例如四舍五入到万元），"
-                             "并且不标注事实编号，以便验证环节能够捕获该问题。"
-                             "这只是演练要求，不是让你降低质量。")
+                # 故障演练：只在报告环节注入一次「输出截断」（max_tokens=120）。
+                # 不在分析链注入错误——它会被下游反复加工，导致整条链路发散。
+                # 截断属环境级故障，确定性可复现，对标混沌工程的做法。
                 started = now_iso()
                 comp = self.backend.chat(
                     [{"role": "system", "content": ag["system"]},
                      {"role": "user", "content": user}],
                     model=ag.get("model", "fast"),
                     temperature=0.2,
+                    max_tokens=(120 if (self.force_fault and attempt == attempt_start
+                                        and node_id == "report")
+                                else int(node.get("max_tokens", 3500))),
                     meta={
                         "role": role,
                         "facts": facts,
@@ -320,7 +425,7 @@ class Executor:
                     run_id, node_id, ag["id"], role, attempt, status, comp.model,
                     comp.prompt_tokens, comp.completion_tokens, comp.latency_ms, cost,
                     tool_calls, last_text, comp.error, started, now_iso(),
-                    decision.to_dict(),
+                    decision.to_dict(), prompt=user,
                 )
 
                 if comp.error:
@@ -337,22 +442,14 @@ class Executor:
                     if vname == "rule":
                         verdicts.append(V.rule_verify(last_text, node.get("rule", {})))
                     elif vname == "recompute":
-                        verdicts.append(V.recompute_verify(last_text, facts,
-                                                           list(self.evidence_nums)))
+                        verdicts.append(V.recompute_verify(
+                            last_text, facts, list(self.evidence_nums),
+                            required=node.get("required_facts")))
                     elif vname == "llm_judge":
-                        verdicts.append(V.llm_judge_verify(last_text, reviewer_text=last_text))
+                        verdicts.append(self._judge(node, last_text, facts, role,
+                                                    run_id, ag))
                     elif vname == "cross":
-                        second = self.backend.chat(
-                            [{"role": "system", "content": ag["system"]},
-                             {"role": "user", "content": user}],
-                            model=ag.get("model", "fast"), temperature=0.7,
-                            meta={"role": role, "facts": facts, "attempt": attempt + 1,
-                                  "task_key": node_id + "#cross"},
-                        )
-                        self.total_tokens += second.prompt_tokens + second.completion_tokens
-                        self.total_cost += self._cost(ag, second.prompt_tokens,
-                                                      second.completion_tokens)
-                        verdicts.append(V.cross_verify(last_text, second.text or "", facts))
+                        verdicts.append(self._cross(node, last_text, facts, ctx, ag))
 
                 for v in verdicts:
                     self.store.add_verdict(run_id, node_id, v.verifier, v.passed,
@@ -367,6 +464,13 @@ class Executor:
 
                 g = V.gate(verdicts)
                 marks = " ".join(f"{v.verifier}{'✓' if v.passed else '✗'}" for v in verdicts)
+                # 「参考项」只记录不阻塞：例如仲裁节点的 cross 用于呈现上游分歧，
+                # 不该因为上游本身有问题就把仲裁员的输出判死。
+                advisory = set(node.get("advisory") or [])
+                blocking = [v for v in verdicts if v.verifier not in advisory]
+                if advisory and blocking:
+                    g = V.gate(blocking)
+                self.last_verdicts[node_id] = verdicts
                 if g.passed:
                     self._say(f"  · {node_id:<10}{ag['id']:<13}第{attempt}轮 "
                               f"{comp.latency_ms:>5}ms {tok:>5}tok  {marks} → 接受")
@@ -394,7 +498,9 @@ class Executor:
                     "验证未通过，原因如下：\n"
                     + json.dumps([v.to_dict() for v in verdicts if not v.passed],
                                  ensure_ascii=False, indent=1)[:2000]
-                    + "\n请修正后输出完整内容；所有数字必须来自事实表，不得新增未出现过的数字。"
+                    + "\n请修正后输出完整内容；所有数字必须来自事实表。"
+                    + "\n注意：以上仅为修改要求，**不要在正文里复述这些要求或罗列“不合格项”**，"
+                      "直接输出修改后的完整正文。"
                 )
                 if self.total_tokens > budget:
                     repair_hint = ""

@@ -1,8 +1,12 @@
 {
   "name": "data_insight",
   "title": "多 Agent 经营数据诊断",
-  "version": 2,
+  "version": 3,
   "final_node": "report",
+  "review_node": "review",
+  "backtrack_to": "report",
+  "backtrack_rounds": 1,
+  "backtrack_attempts": 1,
   "max_rounds": 3,
   "budget_tokens": 200000,
   "inputs": {
@@ -14,69 +18,170 @@
       "id": "profile",
       "role": "data_profiler",
       "depends_on": [],
-      "candidates": ["profiler-a"],
+      "candidates": [
+        "profiler-a"
+      ],
       "task": "请探查数据集 {dataset} 的结构与质量。业务问题背景：{question}",
-      "tools": ["csv_profile"],
-      "verify": ["rule"],
+      "tools": [
+        "csv_profile"
+      ],
+      "verify": [
+        "rule"
+      ],
       "timeout_s": 60
     },
     {
       "id": "clean",
       "role": "cleaner",
-      "depends_on": ["profile"],
-      "candidates": ["cleaner-a"],
+      "depends_on": [
+        "profile"
+      ],
+      "candidates": [
+        "cleaner-a"
+      ],
       "task": "依据探查报告给出清洗规则清单与影响记录数。\n[探查报告]\n{profile}",
       "tools": [],
-      "verify": ["rule"],
+      "verify": [
+        "rule"
+      ],
       "timeout_s": 60
     },
     {
-      "id": "analyze",
+      "id": "analyze_a",
       "role": "analyst",
-      "depends_on": ["clean"],
-      "candidates": ["analyst-a", "analyst-b"],
-      "task": "基于事实表完成经营分析，回答业务问题。\n[业务问题]\n{question}\n[清洗结论]\n{clean}",
-      "tools": ["sql_query"],
+      "depends_on": [
+        "clean"
+      ],
+      "candidates": [
+        "analyst-a"
+      ],
+      "task": "从『规模与排名』角度完成经营分析：各区域营收、订单数、单均营收的排序，以及量价结构差异。数字必须来自事实表。\n[业务问题]\n{question}\n[清洗结论]\n{clean}",
+      "tools": [
+        "sql_query"
+      ],
       "tool_args": {
-        "query": "SELECT region, ROUND(SUM(revenue),2) AS rev, COUNT(*) AS orders FROM sales GROUP BY region ORDER BY rev DESC"
+        "query": "SELECT region, ROUND(SUM(revenue),2) AS rev, COUNT(*) AS orders, ROUND(SUM(revenue)/COUNT(*),2) AS avg_rev FROM sales GROUP BY region ORDER BY rev DESC"
       },
-      "verify": ["rule", "recompute"],
+      "verify": [
+        "rule",
+        "recompute"
+      ],
       "timeout_s": 120
+    },
+    {
+      "id": "analyze_b",
+      "role": "analyst",
+      "depends_on": [
+        "clean"
+      ],
+      "candidates": [
+        "analyst-b"
+      ],
+      "task": "从『异常与交叉』角度独立完成经营分析：找出与整体均值背离的区域、品类结构异常、以及可能的成因假设。同样以事实表为准。\n[业务问题]\n{question}\n[清洗结论]\n{clean}",
+      "tools": [
+        "sql_query"
+      ],
+      "tool_args": {
+        "query": "SELECT product, ROUND(SUM(revenue),2) AS rev, COUNT(*) AS orders, ROUND(SUM(revenue)/COUNT(*),2) AS avg_rev FROM sales GROUP BY product ORDER BY rev DESC"
+      },
+      "verify": [
+        "rule",
+        "recompute"
+      ],
+      "required_facts": [],
+      "timeout_s": 120
+    },
+    {
+      "id": "arbitrate",
+      "role": "arbiter",
+      "depends_on": [
+        "analyze_a",
+        "analyze_b"
+      ],
+      "candidates": [
+        "arbiter-a"
+      ],
+      "task": "两位分析师独立完成了同一份数据的分析，请比对并仲裁，输出唯一的合并结论。一致处直接采纳，矛盾处指出分歧并判定哪一方有事实依据。\n[分析师 A：规模与排名]\n{analyze_a}\n\n[分析师 B：异常与交叉]\n{analyze_b}",
+      "tools": [],
+      "verify": [
+        "rule",
+        "cross",
+        "recompute"
+      ],
+      "cross_with": [
+        "analyze_a",
+        "analyze_b"
+      ],
+      "advisory": [
+        "cross"
+      ],
+      "timeout_s": 150,
+      "max_tokens": 3000
     },
     {
       "id": "deep_dive",
       "role": "analyst",
-      "depends_on": ["analyze"],
-      "candidates": ["analyst-b", "analyst-a"],
-      "task": "对失真切片做深挖，说明异常成因假设及验证方法。\n[分析结论]\n{analyze}",
-      "tools": ["sql_query"],
+      "depends_on": [
+        "arbitrate"
+      ],
+      "candidates": [
+        "analyst-a",
+        "analyst-b"
+      ],
+      "task": "对仲裁结论中的异常切片做深挖，说明成因假设与验证方法。\n[仲裁结论]\n{arbitrate}",
+      "tools": [
+        "sql_query"
+      ],
       "tool_args": {
         "query": "SELECT region, product, ROUND(SUM(revenue),2) AS rev, COUNT(*) AS orders, ROUND(SUM(revenue)/COUNT(*),2) AS avg_rev FROM sales GROUP BY region, product ORDER BY region, rev DESC"
       },
-      "verify": ["rule"],
+      "verify": [
+        "rule"
+      ],
       "when": "outlier_count > 0",
       "timeout_s": 120
     },
     {
       "id": "report",
       "role": "writer",
-      "depends_on": ["analyze", "deep_dive"],
-      "candidates": ["writer-a"],
-      "task": "撰写管理层诊断报告。数字必须原样搬运，不得改动。\n[分析结论]\n{analyze}\n[深挖结论]\n{deep_dive}",
+      "depends_on": [
+        "arbitrate",
+        "deep_dive"
+      ],
+      "candidates": [
+        "writer-a"
+      ],
+      "task": "撰写管理层诊断报告。数字必须原样搬运，不得改动。\n[仲裁结论]\n{arbitrate}\n[深挖结论]\n{deep_dive}",
       "tools": [],
-      "verify": ["rule", "recompute"],
-      "rule": {"min_len": 300, "min_headings": 3},
-      "timeout_s": 120
+      "verify": [
+        "rule",
+        "recompute"
+      ],
+      "rule": {
+        "min_len": 300,
+        "min_headings": 3,
+        "complete_ending": true
+      },
+      "timeout_s": 120,
+      "max_tokens": 6000
     },
     {
       "id": "review",
       "role": "reviewer",
-      "depends_on": ["report"],
-      "candidates": ["reviewer-a"],
-      "task": "逐条核对下列报告中每个数字的出处，给出 PASS/FAIL 与问题清单。\n[报告]\n{report}\n[事实表]\n{profile}\n[本次工具证据（上游节点实际取到的数据，报告引用它们属于合法）]\n{tool_evidence}",
+      "depends_on": [
+        "report"
+      ],
+      "candidates": [
+        "reviewer-a"
+      ],
+      "task": "逐条核对下列报告中每个数字的出处，给出 通过/不通过 与问题清单。\n[报告]\n{report}\n[事实表]\n{profile}\n[本次工具证据（上游节点实际取到的数据，报告引用它们属于合法）]\n{tool_evidence}",
       "tools": [],
-      "verify": ["llm_judge"],
-      "timeout_s": 120
+      "verify": [
+        "llm_judge"
+      ],
+      "judge_by_model": true,
+      "max_attempts": 1,
+      "timeout_s": 150
     }
   ]
 }
