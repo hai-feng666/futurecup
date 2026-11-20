@@ -162,7 +162,8 @@ set_cn(r, CN, 12)
 
 blank(doc, 4)
 
-for line in ["参赛队伍：hai-feng666", "参赛人数：1 人（个人参赛）",
+for line in ["参赛队伍：阿巴阿巴", "参赛者：樊俊斌（湛江科技学院）",
+             "参赛人数：1 人（个人参赛）",
              "参赛赛题：赛题一 Agent 编排创新应用", "提交日期：2026 年 11 月"]:
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -183,7 +184,7 @@ body(doc, "平台的核心主张是：大模型 Agent 落地生产环境的瓶�
           "支持顺序、并行、条件分支与节点级循环；二是基于能力画像与 UCB 探索的调度器，"
           "使“把任务派给谁”成为可解释的算法决策而非硬编码；三是四层结果验证与置信度门控，"
           "把“AI 生成”转化为“AI 生成且可证伪”。")
-body(doc, "平台实现为 12 个 Python 模块、约 2,100 行代码，核心零第三方依赖，"
+body(doc, "平台实现为 12 个 Python 模块、约 2,300 行代码，核心零第三方依赖，"
           "在真实大模型上完成 10 余次端到端运行；基准运行（run-1794876724178-da7e）为 "
           "8 个节点、8 次模型调用、5.8 万 tokens、成本 0.197 元、耗时 90.8 秒，"
           "13 条验证记录全部通过、零返修。")
@@ -493,7 +494,7 @@ r = p.add_run("futurecup/\n"
               "├── config/agents.json        6 个 Agent 定义\n"
               "├── flows/data_insight.json   工作流定义（DAG）\n"
               "├── data/                     演示数据集与生成脚本\n"
-              "├── harness/                  12 个核心模块（约 2100 行）\n"
+              "├── harness/                  12 个核心模块（约 2300 行）\n"
               "│   ├── engine.py             DAG 执行引擎 + 自循环\n"
               "│   ├── scheduler.py          能力画像调度器\n"
               "│   ├── verify.py             四层验证 + 置信度门控\n"

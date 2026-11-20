@@ -13,6 +13,8 @@
 
 ## 一、30 秒跑起来（零第三方依赖）
 
+**环境要求：Python 3.10 或更高版本**，其他什么都不用装。
+
 ```powershell
 # 1) 进入目录
 cd futurecup
@@ -209,7 +211,7 @@ futurecup/
 ├── flows/data_insight.json   工作流（DAG，8 节点 / 7 层）
 ├── data/sales.csv            主演示数据集（240 行，含 3 类脏数据）
 ├── data/demo_second.csv      第二份数据集（120 行，用于验证与数据无关）
-├── harness/                  12 个核心模块（约 2100 行）
+├── harness/                  12 个核心模块（约 2300 行）
 │   ├── engine.py             DAG 执行引擎 + 自循环
 │   ├── scheduler.py          能力画像调度器
 │   ├── verify.py             四层验证 + 置信度门控

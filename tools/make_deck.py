@@ -232,10 +232,10 @@ text(s, 0.9, 1.75, W - 1.8, 0.8, "数诊编排 DataDx", size=42, bold=True,
 text(s, 0.9, 2.62, W - 1.8, 0.55, "面向经营数据诊断的多智能体编排调度平台",
      size=20, color=SOFT, align=PP_ALIGN.CENTER)
 lines(s, 0.9, 3.75, W - 1.8, 2.0,
-      ["团队名称：hai-feng666",
-       "演讲人：hai-feng666",
+      ["团队名称：阿巴阿巴",
+       "演讲人：樊俊斌",
        "指导教师：无（个人参赛）",
-       "学    校：（按报名信息填写）"],
+       "学    校：湛江科技学院"],
       size=17, spacing=1.75, anchor=MSO_ANCHOR.TOP)
 for p in s.shapes[-1].text_frame.paragraphs:
     p.alignment = PP_ALIGN.CENTER
